@@ -57,7 +57,6 @@ local defaultConfig = {
     autoChest = false,
     -- Eggs
     selectedEgg = "",
-    selectedEggLocationPriorities = {},
     selectedRiftEgg = "",
     autoRiftEgg = false,
     autoRiftEggSpawn = false,
@@ -126,6 +125,12 @@ local defaultConfig = {
     RebirthVariants = { "Normal" },
     RebirthMachineEnabled = false,
     AdminRebirthMachineEnabled = false,
+        -- Teams
+    teamHatch = 1,
+    teamBubble = 2,
+    teamCurrency1 = 3,
+    teamCurrency2 = 4,
+    autoSwitchTeams = true,
     -- Other
     disableRendering = false,
 }
@@ -199,6 +204,46 @@ pcall(function() ItemUtil = require(ReplicatedStorage.Shared.Utils.Stats.ItemUti
 local RemoteFolder = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Framework"):WaitForChild("Network"):WaitForChild("Remote")
 local remote = RemoteFolder:WaitForChild("RemoteEvent")
 local remotefunction = RemoteFolder:WaitForChild("RemoteFunction")
+-- ============================================================
+-- Team switcher
+-- ============================================================
+local _currentTeam = nil
+local function equipTeam(teamNumber)
+    if type(teamNumber) ~= "number" or teamNumber < 1 or teamNumber > 10 then
+        return false
+    end
+    local ok = pcall(function()
+        remote:FireServer("EquipTeam", teamNumber)
+    end)
+    if ok then
+        _currentTeam = teamNumber
+        return true
+    end
+    return false
+end
+
+local function getCurrentTeam()
+    return _currentTeam
+end
+
+-- Team name resolution (lets you pass "hatch", "bubble", "currency1", "currency2")
+local function resolveTeamName(name)
+    if type(name) == "number" then return name end
+    if type(name) ~= "string" then return nil end
+    local n = string.lower(name)
+    if n == "hatch" or n == "hatching" then return Config.teamHatch end
+    if n == "bubble" or n == "bubbling" then return Config.teamBubble end
+    if n == "currency1" or n == "coins" or n == "coin" then return Config.teamCurrency1 end
+    if n == "currency2" or n == "gems" or n == "gem" then return Config.teamCurrency2 end
+    return nil
+end
+
+-- Switch to a named team (returns true on success)
+local function switchToTeam(name)
+    local n = resolveTeamName(name)
+    if not n then return false end
+    return equipTeam(n)
+end
 
 local HatchModule, originalPlay
 pcall(function()
@@ -232,385 +277,44 @@ local function getMaxHatchAmount()
 end
 
 -- ============================================================
--- Egg picker (tracker-only, so new event eggs appear automatically).
+-- Hardcoded egg coordinates
+-- Add: ["Egg Name"] = Vector3.new(X, Y, Z),
 -- ============================================================
-local getTrackedEggNames
-local function buildEggPickerList(force)
-    return getTrackedEggNames and getTrackedEggNames(force) or {}
-end
-
--- ============================================================
--- Egg location tracker 
--- ============================================================
-local ENV = (getgenv and getgenv()) or _G
-ENV._1rzHubLiteEggChunkerTracker = ENV._1rzHubLiteEggChunkerTracker or ENV.EggChunkerTracker or {
-    Chunkers = {},
-    Positions = setmetatable({}, { __mode = "k" }),
-    Patched = false,
+local EGG_COORDS = {
+    -- ["Common Egg"]     = Vector3.new(0, 0, 0),
+    -- ["Unique Egg"]     = Vector3.new(0, 0, 0),
+    -- ["Rare Egg"]       = Vector3.new(0, 0, 0),
+    -- ["Epic Egg"]       = Vector3.new(0, 0, 0),
+    -- ["Legendary Egg"]  = Vector3.new(0, 0, 0),
+    -- ["Secret Egg"]     = Vector3.new(0, 0, 0),
+    -- ["Infinity Egg"]   = Vector3.new(0, 0, 0),
 }
-ENV.EggChunkerTracker = ENV._1rzHubLiteEggChunkerTracker
 
-local EggLocationTracker = ENV._1rzHubLiteEggChunkerTracker
-EggLocationTracker.Chunkers = EggLocationTracker.Chunkers or {}
-EggLocationTracker.Positions = EggLocationTracker.Positions or setmetatable({}, { __mode = "k" })
-
-local HIDE_GENERIC_EGG_NAME = true
-local EGG_SAVE_Y_OFFSET = 5
 local INFINITY_EGG_SAVE_Y_OFFSET = 10
-local _eggLocationCache, _eggLocationRowsCache, _eggLocationCacheAt = nil, nil, 0
+local EGG_SAVE_Y_OFFSET = 5
 
-local function invalidateEggLocationCache()
-    _eggLocationCache, _eggLocationRowsCache, _eggLocationCacheAt = nil, nil, 0
+local function resolveEggPosition(name)
+    if type(name) ~= "string" or name == "" then return nil end
+    local c = EGG_COORDS[name]
+    if not c then return nil end
+    local yOff = (name == "Infinity Egg") and INFINITY_EGG_SAVE_Y_OFFSET or EGG_SAVE_Y_OFFSET
+    return { X = c.X, Y = c.Y + yOff, Z = c.Z }
 end
 
-local function findChunkerModule()
-    local shared = ReplicatedStorage:FindFirstChild("Shared")
-    local framework = shared and shared:FindFirstChild("Framework")
-    local classes = framework and framework:FindFirstChild("Classes")
-    local direct = classes and classes:FindFirstChild("Chunker")
-    if direct and direct:IsA("ModuleScript") then return direct end
-
-    local utils = shared and shared:FindFirstChild("Utils")
-    local utilChunker = utils and utils:FindFirstChild("Chunker")
-    if utilChunker and utilChunker:IsA("ModuleScript") then return utilChunker end
-
-    for _, inst in ipairs(ReplicatedStorage:GetDescendants()) do
-        if inst:IsA("ModuleScript") and inst.Name == "Chunker" then
-            return inst
-        end
-    end
-    return nil
-end
-
-local function addTrackedChunker(chunker)
-    if type(chunker) ~= "table" then return end
-    for _, existing in ipairs(EggLocationTracker.Chunkers) do
-        if existing == chunker then return end
-    end
-    table.insert(EggLocationTracker.Chunkers, chunker)
-    invalidateEggLocationCache()
-end
-
-local function isChunkerTable(t)
-    return type(t) == "table"
-        and type(rawget(t, "_chunks")) == "table"
-        and type(rawget(t, "_loaded")) == "table"
-        and rawget(t, "_chunkSize") ~= nil
-        and rawget(t, "RenderDistance") ~= nil
-end
-
-local function installEggLocationTracker()
-    local moduleScript = findChunkerModule()
-    local ok, Chunker = false, nil
-    if moduleScript then
-        ok, Chunker = pcall(require, moduleScript)
-    end
-
-    if ok and type(Chunker) == "table" and not EggLocationTracker.Patched then
-        EggLocationTracker.Patched = true
-
-        local oldNew = Chunker.new
-        if type(oldNew) == "function" then
-            Chunker.new = function(...)
-                local chunker = oldNew(...)
-                addTrackedChunker(chunker)
-                return chunker
-            end
-        end
-
-        local oldAdd = Chunker.Add
-        if type(oldAdd) == "function" then
-            Chunker.Add = function(self, position, value, ...)
-                addTrackedChunker(self)
-                if position ~= nil and value ~= nil then
-                    EggLocationTracker.Positions[value] = position
-                    invalidateEggLocationCache()
-                end
-                return oldAdd(self, position, value, ...)
-            end
-        end
-    end
-
-    if getgc then
-        pcall(function()
-            for _, obj in ipairs(getgc(true)) do
-                if isChunkerTable(obj) then
-                    addTrackedChunker(obj)
-                end
-            end
-        end)
-    end
-
-    return #EggLocationTracker.Chunkers > 0 or (ok and type(Chunker) == "table")
-end
-
-local _eggNameSet
-local function getKnownEggNameSet()
-    if _eggNameSet then return _eggNameSet end
-    local set = {}
-    local EggsModule = EggsData
-    if type(EggsModule) ~= "table" or next(EggsModule) == nil then
-        pcall(function() EggsModule = require(ReplicatedStorage.Shared.Data.Eggs) end)
-    end
-    if type(EggsModule) == "table" then
-        for eggName in pairs(EggsModule) do
-            if type(eggName) == "string" then set[eggName] = true end
-        end
-    end
-    pcall(function()
-        local assets = ReplicatedStorage:FindFirstChild("Assets")
-        local eggsFolder = assets and assets:FindFirstChild("Eggs")
-        if eggsFolder then
-            for _, child in ipairs(eggsFolder:GetChildren()) do
-                set[child.Name] = true
-            end
-        end
-    end)
-    _eggNameSet = set
-    return set
-end
-
-local function getEggObjectName(value)
-    if typeof(value) == "Instance" then
-        return value.Name
-    end
-    if type(value) == "table" then
-        return rawget(value, "Name") or rawget(value, "name") or rawget(value, "Egg") or rawget(value, "egg")
-    end
-    if value ~= nil then
-        return tostring(value)
-    end
-    return nil
-end
-
-local function looksLikeEggObject(value)
-    local name = getEggObjectName(value)
-    if type(name) ~= "string" or name == "" then return false end
-    if HIDE_GENERIC_EGG_NAME and name == "Egg" then return false end
-    if getKnownEggNameSet()[name] then return true end
-    if typeof(value) == "Instance" then
-        if CollectionService:HasTag(value, "Egg") then return true end
-        return string.find(string.lower(value.Name), "egg", 1, true) ~= nil
-    end
-    return string.find(string.lower(name), "egg", 1, true) ~= nil
-end
-
-local function toVector3(pos)
-    if typeof(pos) == "Vector3" then return pos end
-    if typeof(pos) == "CFrame" then return pos.Position end
-    return nil
-end
-
-local function getObjectPosition(value)
-    local saved = toVector3(EggLocationTracker.Positions[value])
-    if saved then return saved end
-    if typeof(value) ~= "Instance" then return nil end
-
-    local ok, result = pcall(function()
-        if value:IsA("Model") then
-            return value:GetPivot().Position
-        elseif value:IsA("BasePart") then
-            return value.Position
-        end
-    end)
-    if ok and typeof(result) == "Vector3" then return result end
-    return nil
-end
-
-local function approximateFromChunk(chunker, chunkCoord)
-    local size = rawget(chunker, "_chunkSize") or 1
-    local sx, sy, sz = size, size, size
-    if typeof(size) == "Vector3" then
-        sx, sy, sz = size.X, size.Y, size.Z
-    end
-    return Vector3.new(
-        ((chunkCoord.X or 0) - 0.5) * sx,
-        ((chunkCoord.Y or 0) - 0.5) * sy,
-        ((chunkCoord.Z or 0) - 0.5) * sz
-    )
-end
-
-local function scoreEggLocationRow(row)
-    return (row.exact and 1000 or 0) + (row.loaded and 100 or 0)
-end
-
-local function roundCoord(n)
-    n = tonumber(n) or 0
-    return math.floor(n * 1000 + (n >= 0 and 0.5 or -0.5)) / 1000
-end
-
-local function makeEggLocationKey(name, pos, chunkerIndex, chunkCoord)
-    local cx = chunkCoord and chunkCoord.X or 0
-    local cy = chunkCoord and chunkCoord.Y or 0
-    local cz = chunkCoord and chunkCoord.Z or 0
-    return table.concat({
-        tostring(name or ""),
-        tostring(chunkerIndex or 0),
-        tostring(cx),
-        tostring(cy),
-        tostring(cz),
-        tostring(roundCoord(pos and pos.X or 0)),
-        tostring(roundCoord(pos and pos.Y or 0)),
-        tostring(roundCoord(pos and pos.Z or 0)),
-    }, "|")
-end
-
-local function sortEggLocationRows(rows)
-    table.sort(rows, function(a, b)
-        local sa, sb = scoreEggLocationRow(a), scoreEggLocationRow(b)
-        if sa ~= sb then return sa > sb end
-        return tostring(a.key or "") < tostring(b.key or "")
-    end)
-    return rows
-end
-
-local function getTrackedEggLocationMap(force)
-    if not force and _eggLocationCache and tick() - _eggLocationCacheAt < 2 then
-        return _eggLocationCache, _eggLocationRowsCache
-    end
-
-    installEggLocationTracker()
-    local rows, byName = {}, {}
-    for chunkerIndex, chunker in ipairs(EggLocationTracker.Chunkers) do
-        local chunks = rawget(chunker, "_chunks")
-        local loaded = rawget(chunker, "_loaded")
-        if type(chunks) == "table" then
-            for chunkCoord, values in pairs(chunks) do
-                if type(values) == "table" then
-                    for _, value in pairs(values) do
-                        if looksLikeEggObject(value) then
-                            local name = getEggObjectName(value)
-                            local exactPos = getObjectPosition(value)
-                            local pos = exactPos or approximateFromChunk(chunker, chunkCoord)
-                            local row = {
-                                name = name,
-                                position = pos,
-                                key = makeEggLocationKey(name, pos, chunkerIndex, chunkCoord),
-                                exact = exactPos ~= nil,
-                                loaded = loaded and loaded[chunkCoord] ~= nil or false,
-                                chunker = chunkerIndex,
-                                chunk = chunkCoord,
-                            }
-                            table.insert(rows, row)
-                            local old = byName[name]
-                            if not old or scoreEggLocationRow(row) > scoreEggLocationRow(old) then
-                                byName[name] = row
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    table.sort(rows, function(a, b)
-        if a.name == b.name then return scoreEggLocationRow(a) > scoreEggLocationRow(b) end
-        return string.lower(a.name) < string.lower(b.name)
-    end)
-
-    _eggLocationCache, _eggLocationRowsCache, _eggLocationCacheAt = byName, rows, tick()
-    return byName, rows
-end
-
-getTrackedEggNames = function(force)
-    local byName = getTrackedEggLocationMap(force == true)
+local function buildEggPickerList()
     local out = {}
-    for name in pairs(byName) do table.insert(out, name) end
+    for name in pairs(EGG_COORDS) do
+        table.insert(out, name)
+    end
     table.sort(out, function(a, b) return string.lower(a) < string.lower(b) end)
     return out
 end
 
-local function getTrackedRowsForEgg(name, force)
-    if type(name) ~= "string" or name == "" then return {} end
-    local _, rows = getTrackedEggLocationMap(force == true)
-    local out = {}
-    for _, row in ipairs(rows) do
-        if row.name == name then
-            table.insert(out, row)
-        end
-    end
-    return sortEggLocationRows(out)
+local function getTrackedRowsForEgg(name)
+    local c = EGG_COORDS[name]
+    if not c then return {} end
+    return { { name = name, position = c, key = "hardcoded", exact = true, loaded = true } }
 end
-
-local function getTrackedRowByKey(name, key, force)
-    if type(key) ~= "string" or key == "" then return nil end
-    for _, row in ipairs(getTrackedRowsForEgg(name, force)) do
-        if row.key == key then
-            return row
-        end
-    end
-    return nil
-end
-
-local function getPreferredTrackedEggRow(name)
-    local rows = getTrackedRowsForEgg(name, false)
-    if #rows == 0 then return nil end
-
-    local priorities = type(Config.selectedEggLocationPriorities) == "table" and Config.selectedEggLocationPriorities or {}
-    local selectedKey = priorities[name]
-    local selected = getTrackedRowByKey(name, selectedKey, false)
-    if selected then return selected end
-
-    return rows[1]
-end
-
-local function trackedRowToTeleportPosition(row)
-    if type(row) ~= "table" or typeof(row.position) ~= "Vector3" then return nil end
-    local yOff = (row.name == "Infinity Egg") and INFINITY_EGG_SAVE_Y_OFFSET or EGG_SAVE_Y_OFFSET
-    return { X = row.position.X, Y = row.position.Y + yOff, Z = row.position.Z }
-end
-
-local function refreshTrackedEggLocations()
-    local byName, rows = getTrackedEggLocationMap(true)
-    local count = 0
-    for _ in pairs(byName) do
-        count = count + 1
-    end
-    return count, #rows
-end
-
-local _eggLocationScanBusy = false
-local function runEggLocationScan(silent)
-    if _eggLocationScanBusy then return end
-    _eggLocationScanBusy = true
-    local ok, eggCount, hitCount = pcall(refreshTrackedEggLocations)
-    _eggLocationScanBusy = false
-
-    if not silent then
-        if ok then
-            Fluent:Notify({
-                Title = "Egg scan",
-                Content = eggCount > 0
-                    and ("Done - found " .. eggCount .. " egg(s) from " .. hitCount .. " chunker location(s).")
-                    or "Done - no egg locations found yet.",
-                Duration = 6,
-            })
-        else
-            Fluent:Notify({ Title = "Egg scan", Content = "Failed: " .. tostring(eggCount), Duration = 5 })
-        end
-    end
-end
-
-local function resolveEggPosition(name)
-    if type(name) ~= "string" or name == "" then return nil end
-
-    local tracked = getPreferredTrackedEggRow(name)
-    local trackedPos = trackedRowToTeleportPosition(tracked)
-    if trackedPos then return trackedPos end
-
-    return nil
-end
-
-task.defer(function()
-    for _ = 1, 20 do
-        if installEggLocationTracker() then return end
-        task.wait(0.5)
-    end
-end)
-
--- ============================================================
--- Legacy rendered egg scan removed; locations now come from the Chunker tracker above.
--- ============================================================
 
 -- Uniform Y offset added when teleporting so player lands above the egg, not inside it.
 -- Tracker coords get a base offset first, then this final player-safe offset.
@@ -1163,6 +867,7 @@ local EventTab = Window:AddTab({ Title = "Event", Icon = "flower" })
 local ChestTab = Window:AddTab({ Title = "Chests", Icon = "package" })
 local PotionsTab = Window:AddTab({ Title = "Potions", Icon = "beaker" })
 local GameTab = Window:AddTab({ Title = "Game", Icon = "gamepad" })
+local TeamsTab = Window:AddTab({ Title = "Teams", Icon = "users" })
 local MinigamesTab = Window:AddTab({ Title = "Minigames", Icon = "joystick" })
 local EnchantTab = Window:AddTab({ Title = "Enchant", Icon = "wand-sparkles" })
 local QuestsTab = Window:AddTab({ Title = "Quests", Icon = "scroll" })
@@ -1170,6 +875,7 @@ local ShrineTab = Window:AddTab({ Title = "Shrines", Icon = "sparkles" })
 local WebhookTab = Window:AddTab({ Title = "Webhook", Icon = "link" })
 local RebirthTab = Window:AddTab({ Title = "Rebirth", Icon = "repeat" })
 local OtherTab = Window:AddTab({ Title = "Other", Icon = "workflow" })
+
 
 MainTab:AddParagraph({
     Title = "1rzHub Lite",
@@ -1727,15 +1433,7 @@ do
         end,
     })
 
-    EggTab:AddButton({
-        Title = "Refresh egg locations",
-        Callback = function()
-            task.spawn(function()
-                runEggLocationScan(false)
-                refreshEggDropdown(true)
-            end)
-        end,
-    })
+    
 
     EggTab:AddSection("Hatch")
 
@@ -2734,7 +2432,88 @@ do
         end
     end)
 end
+-- ============================================================
+-- Teams tab
+-- ============================================================
+do
+    TeamsTab:AddSection("Team Assignments")
+    TeamsTab:AddParagraph({
+        Title = "How it works",
+        Content = "Set which of your in-game teams (1–10) is used for hatching, bubbling, and each currency. The quest system will auto-switch when it needs to.",
+    })
 
+    -- Helper to create a numbered input for each team slot
+    local function addTeamInput(flagName, title, configKey, default)
+        TeamsTab:AddInput(flagName, {
+            Title = title,
+            Default = tostring(Config[configKey] or default),
+            Placeholder = "1-10",
+            Numeric = true,
+            Callback = function(v)
+                local n = tonumber(v)
+                if n then
+                    Config[configKey] = math.clamp(math.floor(n), 1, 10)
+                    saveConfig()
+                end
+            end,
+        })
+    end
+
+    addTeamInput("TeamHatchInput",     "Hatch Team Number",       "teamHatch",     1)
+    addTeamInput("TeamBubbleInput",    "Bubble Team Number",      "teamBubble",    2)
+    addTeamInput("TeamCurrency1Input", "Currency Team 1 (Coins)", "teamCurrency1", 3)
+    addTeamInput("TeamCurrency2Input", "Currency Team 2 (Gems)",  "teamCurrency2", 4)
+
+    TeamsTab:AddSection("Quick Switch")
+    TeamsTab:AddParagraph({
+        Title = "Manual switch",
+        Content = "Tap a button to immediately equip that team.",
+    })
+
+    -- One button per team slot, using the configured number
+    TeamsTab:AddButton({
+        Title = "Equip Hatch Team",
+        Callback = function()
+            equipTeam(Config.teamHatch)
+            Fluent:Notify({ Title = "Team", Content = "Equipped hatch team (" .. Config.teamHatch .. ")", Duration = 2 })
+        end,
+    })
+    TeamsTab:AddButton({
+        Title = "Equip Bubble Team",
+        Callback = function()
+            equipTeam(Config.teamBubble)
+            Fluent:Notify({ Title = "Team", Content = "Equipped bubble team (" .. Config.teamBubble .. ")", Duration = 2 })
+        end,
+    })
+    TeamsTab:AddButton({
+        Title = "Equip Currency Team 1",
+        Callback = function()
+            equipTeam(Config.teamCurrency1)
+            Fluent:Notify({ Title = "Team", Content = "Equipped currency team 1 (" .. Config.teamCurrency1 .. ")", Duration = 2 })
+        end,
+    })
+    TeamsTab:AddButton({
+        Title = "Equip Currency Team 2",
+        Callback = function()
+            equipTeam(Config.teamCurrency2)
+            Fluent:Notify({ Title = "Team", Content = "Equipped currency team 2 (" .. Config.teamCurrency2 .. ")", Duration = 2 })
+        end,
+    })
+
+    TeamsTab:AddSection("Auto Switching")
+    TeamsTab:AddToggle("AutoSwitchTeams", {
+        Title = "Auto Switch Teams for Quests",
+        Default = Config.autoSwitchTeams,
+        Callback = function(v)
+            Config.autoSwitchTeams = v
+            saveConfig()
+        end,
+    })
+    TeamsTab:AddParagraph({
+        Title = "Note",
+        Content = "When enabled, quest tasks will auto-switch to the matching team before starting, and switch back to the hatch team when done.",
+    })
+end
 -- ============================================================
 -- Minigames tab
 -- ============================================================
