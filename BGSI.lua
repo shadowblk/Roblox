@@ -848,6 +848,7 @@ local MinigamesTab = Window:AddTab({ Title = "Minigames", Icon = "joystick" })
 local EnchantTab = Window:AddTab({ Title = "Enchant", Icon = "wand-sparkles" })
 local QuestsTab = Window:AddTab({ Title = "Quests", Icon = "scroll" })
 local ShrineTab = Window:AddTab({ Title = "Shrines", Icon = "sparkles" })
+local WebhookTab = Window:AddTab({ Title = "Webhook", Icon = "link" })
 local RebirthTab = Window:AddTab({ Title = "Rebirth", Icon = "repeat" })
 local OtherTab = Window:AddTab({ Title = "Other", Icon = "workflow" })
 
