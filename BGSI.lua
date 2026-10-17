@@ -66,25 +66,16 @@ local defaultConfig = {
     autoBounty = false,
     spawnRift = false,
     autoLuckEgg = false,
-    -- Potions
-    potionType = "Speed",
-    potionLevel = 1,
-    potionUseAmount = 10,
-    potionAuto = false,
     -- Enchant
     autoEnchant = false,
-    autoPowerOrbEquipped = false,
     equippedTargetEnchant = "secret-hunter",
     equippedTargetEnchant2 = "",
     equippedTargetEnchantLevel = 0,
     equippedEnchantCurrency = "Auto (Secret=Crystals, Normal=Gems)",
     -- Game
     autoPlaytime = false,
-    autoEquipBestPets = false,
-    autoUpgradeMastery = false,
     autoCollectCoins = false,
     autoBubble = false,
-    autoSell = false,
     selectedMysteryBox = "Mystery Box",
     autoOpenMystery = false,
     autoOpenMysteryDelay = 0.2,
@@ -106,20 +97,7 @@ local defaultConfig = {
     shrineLevel = 1,
     shrinePotion = "Lucky",
     shrineAmount = 10,
-    -- Webhook
-    webhookEnabled = false,
-    webhookURL = "",
-    webhookHidePlayerName = false,
-    webhookPingEnabled = false,
-    webhookPingUserId = "",
-    webhookLowCurrencyEnabled = false,
-    webhookLowCoinsBelow = "",
-    webhookLowGemsBelow = "",
-    webhookLowPearlsBelow = "",
-    webhookLowTicketsBelow = "",
-    webhookLowCurrencyCooldownMinutes = 30,
-    webhookRarities = { Secret = true, Legendary = false, Epic = false, Rare = false, Unique = false, Common = false },
-    -- Rebirth
+     -- Rebirth
     RebirthPetName = "Man Face Lord",
     AdminRebirthPetName = "Man Face Lord",
     RebirthVariants = { "Normal" },
@@ -190,14 +168,13 @@ _G.FluentLite = Fluent
 local LocalData = require(ReplicatedStorage.Client.Framework.Services.LocalData)
 local TimeUtil = require(ReplicatedStorage.Shared.Framework.Utilities.Math.Time)
 local QuestUtil = require(ReplicatedStorage.Shared.Utils.Stats.QuestUtil)
-local EnchantUtil, EnchantsData, PetsData, EggsData, RiftsData, BountyUtil, PotionsData, PowerupsData, ItemUtil
+local EnchantUtil, EnchantsData, PetsData, EggsData, RiftsData, BountyUtil, PowerupsData, ItemUtil
 pcall(function() EnchantUtil = require(ReplicatedStorage.Shared.Utils.EnchantUtil) end)
 pcall(function() EnchantsData = require(ReplicatedStorage.Shared.Data.Enchants) end)
 pcall(function() PetsData = require(ReplicatedStorage.Shared.Data.Pets) end)
 pcall(function() EggsData = require(ReplicatedStorage.Shared.Data.Eggs) end)
 pcall(function() RiftsData = require(ReplicatedStorage.Shared.Data.Rifts) end)
 pcall(function() BountyUtil = require(ReplicatedStorage.Shared.Utils.Stats.BountyUtil) end)
-pcall(function() PotionsData = require(ReplicatedStorage.Shared.Data.Potions) end)
 pcall(function() PowerupsData = require(ReplicatedStorage.Shared.Data.Powerups) end)
 pcall(function() ItemUtil = require(ReplicatedStorage.Shared.Utils.Stats.ItemUtil) end)
 
@@ -865,14 +842,12 @@ local MainTab = Window:AddTab({ Title = "Main", Icon = "home" })
 local EggTab = Window:AddTab({ Title = "Eggs", Icon = "egg" })
 local EventTab = Window:AddTab({ Title = "Event", Icon = "flower" })
 local ChestTab = Window:AddTab({ Title = "Chests", Icon = "package" })
-local PotionsTab = Window:AddTab({ Title = "Potions", Icon = "beaker" })
 local GameTab = Window:AddTab({ Title = "Game", Icon = "gamepad" })
 local TeamsTab = Window:AddTab({ Title = "Teams", Icon = "users" })
 local MinigamesTab = Window:AddTab({ Title = "Minigames", Icon = "joystick" })
 local EnchantTab = Window:AddTab({ Title = "Enchant", Icon = "wand-sparkles" })
 local QuestsTab = Window:AddTab({ Title = "Quests", Icon = "scroll" })
 local ShrineTab = Window:AddTab({ Title = "Shrines", Icon = "sparkles" })
-local WebhookTab = Window:AddTab({ Title = "Webhook", Icon = "link" })
 local RebirthTab = Window:AddTab({ Title = "Rebirth", Icon = "repeat" })
 local OtherTab = Window:AddTab({ Title = "Other", Icon = "workflow" })
 
@@ -2133,131 +2108,13 @@ do
 end
 
 do
-    local function getPotionTypes()
-        local list = {}
-        if type(PotionsData) == "table" then
-            for name, data in pairs(PotionsData) do
-                if type(name) == "string" and type(data) == "table" then
-                    table.insert(list, { name = name, order = tonumber(data.LayoutOrder) or 9999 })
-                end
-            end
-        end
-        table.sort(list, function(a, b)
-            return a.order == b.order and a.name < b.name or a.order < b.order
-        end)
-        local out = {}
-        for _, row in ipairs(list) do table.insert(out, row.name) end
-        if #out == 0 then out = { "Speed", "Lucky", "Mythic", "Coins", "Secret Elixir", "Infinity Elixir", "Egg Elixir" } end
-        return out
-    end
-
-    local function getPotionLevels(name)
-        local data = type(PotionsData) == "table" and PotionsData[name] or nil
-        if type(data) == "table" then
-            if data.OneLevel == true then return { "1" } end
-            local expiry = data.Buff and data.Buff.Expiry
-            if type(expiry) == "table" and #expiry > 0 then
-                local levels = {}
-                for i = 1, #expiry do levels[i] = tostring(i) end
-                return levels
-            end
-        end
-        return { "1", "2", "3", "4", "5", "6", "7" }
-    end
-
-    local potionTypes = getPotionTypes()
-    if not table.find(potionTypes, Config.potionType) then
-        Config.potionType = potionTypes[1]
-    end
-    local potionLevels = getPotionLevels(Config.potionType)
-    if not table.find(potionLevels, tostring(Config.potionLevel)) then
-        Config.potionLevel = tonumber(potionLevels[1]) or 1
-    end
-
-    PotionsTab:AddSection("Auto Use")
-    local levelDropdown
-    PotionsTab:AddDropdown("PotionType", {
-        Title = "Potion Type",
-        Values = potionTypes,
-        Default = Config.potionType,
-        Multi = false,
-        Search = true,
-        Callback = function(v)
-            Config.potionType = v
-            local levels = getPotionLevels(v)
-            setDropdownValues(levelDropdown, levels)
-            if not table.find(levels, tostring(Config.potionLevel)) then
-                Config.potionLevel = tonumber(levels[1]) or 1
-                if levelDropdown and levelDropdown.SetValue then pcall(function() levelDropdown:SetValue(tostring(Config.potionLevel)) end) end
-            end
-            saveConfig()
-        end,
-    })
-    levelDropdown = PotionsTab:AddDropdown("PotionLevel", {
-        Title = "Level",
-        Values = potionLevels,
-        Default = tostring(Config.potionLevel),
-        Multi = false,
-        Callback = function(v)
-            Config.potionLevel = tonumber(v) or 1
-            saveConfig()
-        end,
-    })
-    PotionsTab:AddSlider("PotionUseAmount", {
-        Title = "Potions Per Use",
-        Min = 1,
-        Max = 250,
-        Default = Config.potionUseAmount,
-        Rounding = 0,
-        Callback = function(v)
-            Config.potionUseAmount = math.clamp(math.floor(tonumber(v) or 1), 1, 250)
-            saveConfig()
-        end,
-    })
-    PotionsTab:AddToggle("AutoUsePotions", {
-        Title = "Auto Use Potions",
-        Default = Config.potionAuto,
-        Callback = function(v)
-            Config.potionAuto = v
-            saveConfig()
-        end,
-    })
-
-    task.spawn(function()
-        while true do
-            task.wait(Config.potionAuto and 0.15 or 0.85)
-            if Config.potionAuto then
-                pcall(function()
-                    remote:FireServer("UsePotion", Config.potionType, Config.potionLevel, Config.potionUseAmount)
-                end)
-            end
-        end
-    end)
-end
-
-do
-    local masteryCategories = { "Pets", "Buffs", "Shops", "Rift", "Minigames" }
+    
 
     GameTab:AddSection("Thangs")
     GameTab:AddToggle("AutoPlaytime", {
         Title = "Claim Playtime",
         Default = Config.autoPlaytime,
         Callback = function(v) Config.autoPlaytime = v; saveConfig() end,
-    })
-    GameTab:AddToggle("AutoEquipBestPets", {
-        Title = "Auto Equip Best Pets",
-        Default = Config.autoEquipBestPets,
-        Callback = function(v) Config.autoEquipBestPets = v; saveConfig() end,
-    })
-    GameTab:AddToggle("AutoUpgradeMastery", {
-        Title = "Auto Upgrade Mastery",
-        Default = Config.autoUpgradeMastery,
-        Callback = function(v) Config.autoUpgradeMastery = v; saveConfig() end,
-    })
-    GameTab:AddToggle("AutoPowerOrbEquipped", {
-        Title = "Auto Power Orb",
-        Default = Config.autoPowerOrbEquipped,
-        Callback = function(v) Config.autoPowerOrbEquipped = v; saveConfig() end,
     })
 
     GameTab:AddSection("Coins and Bubbles")
@@ -2274,11 +2131,6 @@ do
         Title = "Auto Bubble",
         Default = Config.autoBubble,
         Callback = function(v) Config.autoBubble = v; saveConfig() end,
-    })
-    GameTab:AddToggle("AutoSellBubble", {
-        Title = "Auto Sell Bubble",
-        Default = Config.autoSell,
-        Callback = function(v) Config.autoSell = v; saveConfig() end,
     })
 
     GameTab:AddSection("Mystery Boxes")
@@ -2342,48 +2194,6 @@ do
 
     task.spawn(function()
         while true do
-            task.wait(Config.autoEquipBestPets and 3 or 0.85)
-            if Config.autoEquipBestPets then
-                pcall(function() remote:FireServer("EquipBestPets") end)
-            end
-        end
-    end)
-
-    task.spawn(function()
-        while true do
-            task.wait(Config.autoUpgradeMastery and 2 or 0.85)
-            if Config.autoUpgradeMastery then
-                for _, category in ipairs(masteryCategories) do
-                    if not Config.autoUpgradeMastery then break end
-                    pcall(function() remote:FireServer("UpgradeMastery", category) end)
-                    task.wait(0.25)
-                end
-            end
-        end
-    end)
-
-    task.spawn(function()
-        while true do
-            task.wait(Config.autoPowerOrbEquipped and 0.4 or 0.85)
-            if Config.autoPowerOrbEquipped then
-                local data = liteData()
-                local team = data and data.Teams and data.TeamEquipped and data.Teams[data.TeamEquipped]
-                local pets = team and team.Pets
-                if type(pets) == "table" then
-                    for _, petId in ipairs(pets) do
-                        if not Config.autoPowerOrbEquipped then break end
-                        if petId and petId ~= "" then
-                            pcall(function() remote:FireServer("UsePowerOrb", petId) end)
-                            task.wait(0.08)
-                        end
-                    end
-                end
-            end
-        end
-    end)
-
-    task.spawn(function()
-        while true do
             task.wait(Config.autoCollectCoins and 2 or 0.85)
             if Config.autoCollectCoins then
                 pcall(installPickupRangeHook)
@@ -2397,15 +2207,6 @@ do
             task.wait(Config.autoBubble and 0.03 or 0.85)
             if Config.autoBubble then
                 pcall(function() remote:FireServer("BlowBubble") end)
-            end
-        end
-    end)
-
-    task.spawn(function()
-        while true do
-            task.wait(Config.autoSell and 1 or 0.85)
-            if Config.autoSell then
-                pcall(function() remote:FireServer("SellBubble") end)
             end
         end
     end)
@@ -3889,85 +3690,9 @@ do
         Placeholder = "right click user -> Copy User ID",
         Callback = function(v) Config.webhookPingUserId = v; saveConfig() end,
     })
-
-    WebhookTab:AddSection("Low Currency Alerts")
-    WebhookTab:AddToggle("LowCurrencyEnabled", {
-        Title = "Enable Low Currency Alerts",
-        Default = Config.webhookLowCurrencyEnabled,
-        Callback = function(v) Config.webhookLowCurrencyEnabled = v; saveConfig() end,
-    })
-    WebhookTab:AddInput("LowCoins", {
-        Title = "Coins Below",
-        Default = Config.webhookLowCoinsBelow,
-        Placeholder = "e.g. 10M",
-        Callback = function(v) Config.webhookLowCoinsBelow = v; saveConfig() end,
-    })
-    WebhookTab:AddInput("LowGems", {
-        Title = "Gems Below",
-        Default = Config.webhookLowGemsBelow,
-        Placeholder = "e.g. 100K",
-        Callback = function(v) Config.webhookLowGemsBelow = v; saveConfig() end,
-    })
-    WebhookTab:AddInput("LowPearls", {
-        Title = "Pearls Below",
-        Default = Config.webhookLowPearlsBelow,
-        Placeholder = "e.g. 1K",
-        Callback = function(v) Config.webhookLowPearlsBelow = v; saveConfig() end,
-    })
-    WebhookTab:AddInput("LowTickets", {
-        Title = "Tickets Below",
-        Default = Config.webhookLowTicketsBelow,
-        Placeholder = "e.g. 50",
-        Callback = function(v) Config.webhookLowTicketsBelow = v; saveConfig() end,
-    })
-    WebhookTab:AddSlider("LowCurrencyCooldown", {
-        Title = "Alert Cooldown (minutes)",
-        Min = 1, Max = 180,
-        Default = Config.webhookLowCurrencyCooldownMinutes,
-        Rounding = 0,
-        Callback = function(v) Config.webhookLowCurrencyCooldownMinutes = math.floor(v); saveConfig() end,
-    })
 end
 
--- Low currency alert loop
-task.spawn(function()
-    local lastSent = { Coins = 0, Gems = 0, Pearls = 0, Tickets = 0 }
-    while true do
-        task.wait(5)
-        if not Config.webhookEnabled or not Config.webhookLowCurrencyEnabled then continue end
-        local cooldown = math.max(60, (tonumber(Config.webhookLowCurrencyCooldownMinutes) or 30) * 60)
-        local pdata = getPlayerCurrencies()
-        local now = tick()
-        local pending = {}
-        local function consider(key, label, emoji, thresholdString)
-            local th = parseThreshold(thresholdString)
-            if not th then return end
-            local cur = pdata[key] or 0
-            if cur >= th then return end
-            if (now - (lastSent[key] or 0)) < cooldown then return end
-            table.insert(pending, { key = key, label = label, emoji = emoji, current = cur, threshold = thresholdString })
-        end
-        consider("Coins", "Coins", "🪙", Config.webhookLowCoinsBelow)
-        consider("Gems", "Gems", "💎", Config.webhookLowGemsBelow)
-        consider("Pearls", "Pearls", "⚪", Config.webhookLowPearlsBelow)
-        consider("Tickets", "Tickets", "🎫", Config.webhookLowTicketsBelow)
-        if #pending > 0 then
-            local fields = { { name = "Player", value = ("%s (%s)"):format(player.Name, player.UserId), inline = false } }
-            local fieldsHide = { { name = "Player", value = "Player (hidden)", inline = false } }
-            for _, item in ipairs(pending) do
-                local row = {
-                    name = ("%s %s"):format(item.emoji, item.label),
-                    value = ("Current: `%s`\nBelow: `%s`"):format(formatNumber(item.current), tostring(item.threshold)),
-                    inline = true,
-                }
-                table.insert(fields, row)
-                table.insert(fieldsHide, row)
-            end
-            sendWebhook("Low Currency Alert", 16753920, fields, nil, "Low Currency Alert")
-            for _, item in ipairs(pending) do lastSent[item.key] = now end
-        end
-    end
-end)
+    
 
 -- Pet hatch webhook listener (matches main 1rzHub structure: User Info / Pet Info / Chance + image + exist count).
 remote.OnClientEvent:Connect(function(command, data, ...)
